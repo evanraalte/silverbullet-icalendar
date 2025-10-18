@@ -208,6 +208,14 @@ async function getSources(): Promise<Source[]> {
   return validated;
 }
 
+/**
+ * Forces a fresh sync by clearing cache and then syncing calendars
+ */
+export async function forceSync() {
+  await clientStore.del(CACHE_KEY);
+  console.log("[iCalendar] Cache cleared, forcing fresh sync");
+  await editor.flashNotification("Forcing fresh calendar sync...", "info");
+  await syncCalendars();
 }
 
 /**

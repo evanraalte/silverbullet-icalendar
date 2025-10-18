@@ -46,6 +46,8 @@ Instructions to get the source URL for some calendar services:
 
 After configuration, run the `{[iCalendar: Sync]}` command to synchronize calendar events. The plug will cache the results for 6 hours by default (configurable via `cacheDuration` in config).
 
+To bypass the cache and force an immediate sync, use the `{[iCalendar: Force Sync]}` command.
+
 Events are indexed with the tag `ical-event` and can be queried using Lua Integrated Query (LIQ).
 
 ### Examples

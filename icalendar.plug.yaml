@@ -7,6 +7,11 @@ functions:
     command:
       name: "iCalendar: Sync"
       priority: -1
+  forceSync:
+    path: ./icalendar.ts:forceSync
+    command:
+      name: "iCalendar: Force Sync"
+      priority: -1
   showVersion:
     path: ./icalendar.ts:showVersion
     command:
