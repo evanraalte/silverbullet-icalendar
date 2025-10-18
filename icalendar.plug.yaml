@@ -14,6 +14,11 @@ functions:
     command:
       name: "iCalendar: Force Sync"
       priority: -1
+  clearCache:
+    path: ./icalendar.ts:clearCache
+    command:
+      name: "iCalendar: Clear All Events"
+      priority: -1
   showVersion:
     path: ./icalendar.ts:showVersion
     command:

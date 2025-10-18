@@ -219,6 +219,63 @@ export async function forceSync() {
 }
 
 /**
+ * Clears the calendar cache by removing the indexed events page
+ * Implementation based on SilverBullet's clearFileIndex:
+ * https://github.com/silverbulletmd/silverbullet/blob/main/plugs/index/api.ts#L49-L69
+ */
+export async function clearCache() {
+  // Ask for confirmation before clearing the cache
+  if (!await editor.confirm(
+    "Are you sure you want to clear all calendar events and cache? This will remove all indexed calendar data."
+  )) {
+    return;
+  }
+
+  try {
+    const fileName = "$icalendar";
+    console.log("[iCalendar] Clearing index for", fileName);
+
+    // Implementation based on SilverBullet's clearFileIndex function
+    // https://github.com/silverbulletmd/silverbullet/blob/main/plugs/index/api.ts#L49-L69
+    const indexKey = "idx";
+    const pageKey = "ridx";
+
+    // Query all keys for this file
+    const allKeys: any[] = [];
+
+    // Get all page keys for this file: [pageKey, $icalendar, ...key]
+    const pageKeys = await datastore.query({
+      prefix: [pageKey, fileName],
+    });
+
+    for (const { key } of pageKeys) {
+      allKeys.push(key);
+      // Also add corresponding index keys: [indexKey, tag, ref, $icalendar]
+      // where tag is "ical-event" and ref is the event reference
+      allKeys.push([indexKey, ...key.slice(2), fileName]);
+    }
+
+    // Batch delete all found keys
+    if (allKeys.length > 0) {
+      await datastore.batchDel(allKeys);
+      console.log("[iCalendar] Deleted", allKeys.length, "events");
+    }
+
+    // Also clear the sync timestamp cache
+    await clientStore.del(CACHE_KEY);
+
+    console.log("[iCalendar] Calendar index and cache cleared");
+    await editor.flashNotification("Calendar index and cache cleared", "info");
+  } catch (err) {
+    console.error("[iCalendar] Failed to clear cache:", err);
+    await editor.flashNotification(
+      `Failed to clear cache: ${err instanceof Error ? err.message : String(err)}`,
+      "error"
+    );
+  }
+}
+
+/**
  * Shows the plugin version
  */
 export async function showVersion() {

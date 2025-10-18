@@ -48,6 +48,8 @@ After configuration, run the `{[iCalendar: Sync]}` command to synchronize calend
 
 To bypass the cache and force an immediate sync, use the `{[iCalendar: Force Sync]}` command.
 
+To completely clear all indexed events and cache (useful for troubleshooting), use the `{[iCalendar: Clear All Events]}` command.
+
 Events are indexed with the tag `ical-event` and can be queried using Lua Integrated Query (LIQ).
 
 ### Examples
