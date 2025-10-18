@@ -3,6 +3,8 @@
 `silverbullet-icalendar` is a [Plug](https://silverbullet.md/Plugs) for [SilverBullet](https://silverbullet.md/) which I made for my girlfriend.
 It reads external [iCalendar](https://en.wikipedia.org/wiki/ICalendar) data, also known as iCal and `.ics` format, used in CalDAV protocol.
 
+**Note**: This version (0.2.0+) is compatible with **SilverBullet v2 only**. For SilverBullet v1, use version 0.1.0.
+
 ## Installation
 
 Run the {[Plugs: Add]} command in SilverBullet and add paste this URI into the dialog box:
@@ -42,27 +44,41 @@ Instructions to get the source URL for some calendar services:
 
 ## Usage
 
-The plug provides the query source `ical-event`, which corresponds to `VEVENT` object
+After configuration, run the `{[iCalendar: Sync]}` command to synchronize calendar events. The plug will cache the results for 6 hours by default (configurable via `cacheDuration` in config).
+
+Events are indexed with the tag `ical-event` and can be queried using Lua Integrated Query (LIQ).
 
 ### Examples
 
-Select events that start on a given date
+Select events that start on a given date:
 
 ~~~
-```query
-ical-event
-where start =~ /^2024-01-04/
-select summary, description
+```md
+${query[[
+  from index.tag "ical-event" 
+  where start:startsWith "2024-01-04"
+  select {summary=summary, description=description}
+]]}
+```
+~~~
+
+Get the next 5 upcoming events:
+```md
+${query[[
+  from index.tag "ical-event"
+  where start > os.date("%Y-%m-%d")
+  order by start
+  limit 5
+]]}
 ```
 ~~~
 
 ## Roadmap
 
-- Cache the calendar according to `REFRESH-INTERVAL` or `X-PUBLISHED-TTL`, command for manual update
-- More query sources:
+- Cache the calendar according to `REFRESH-INTERVAL` or `X-PUBLISHED-TTL`
+- More indexed object types:
   - `ical-todo` for `VTODO` components
   - `ical-calendar` showing information about configured calendars
-- Describe the properties of query results
 - Support `file://` URL scheme (use an external script or filesystem instead of authentication on CalDAV)
 
 ## Contributing

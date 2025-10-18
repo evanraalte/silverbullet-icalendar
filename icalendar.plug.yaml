@@ -2,15 +2,16 @@ name: icalendar
 requiredPermissions:
   - fetch
 functions:
+  syncCalendars:
+    path: ./icalendar.ts:syncCalendars
+    command:
+      name: "iCalendar: Sync"
+      priority: -1
   showVersion:
     path: ./icalendar.ts:showVersion
     command:
       name: "iCalendar: Version"
       priority: -2
-  queryEvents:
-    path: ./icalendar.ts:queryEvents
-    events:
-      - query:ical-event
 config:
   schema.config.properties.icalendar:
     type: object
@@ -29,3 +30,6 @@ config:
               type: string
             name:
               type: string
+      cacheDuration:
+        type: number
+        description: "Interval between two calendar synchronizations (default: 21600 = 6 hours)"

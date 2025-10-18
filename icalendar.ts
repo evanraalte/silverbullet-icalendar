@@ -1,127 +1,218 @@
-import { editor, system } from "@silverbulletmd/silverbullet/syscalls";
-import { QueryProviderEvent } from "@silverbulletmd/silverbullet/types";
-import { applyQuery } from "@silverbulletmd/silverbullet/lib/query";
+import { clientStore, config, datastore, editor, index } from "@silverbulletmd/silverbullet/syscalls";
+import { localDateString } from "@silverbulletmd/silverbullet/lib/dates";
 import { parseIcsCalendar, type VCalendar } from "ts-ics";
 
-const VERSION = "0.1.0";
+const VERSION = "0.2.0";
+const CACHE_KEY = "icalendar:lastSync";
+const DEFAULT_CACHE_DURATION_SECONDS = 21600; // 6 hours
 
-// Try to match SilverBullet properties where possible.
-// Timestamps should be strings formatted with `localDateString`
-interface Event {
-  // Typically available in calendar apps
+/**
+ * Creates a SHA-256 hash of a string (hex encoded)
+ */
+async function sha256Hash(str: string): Promise<string> {
+  const encoder = new TextEncoder();
+  const data = encoder.encode(str);
+  const hashBuffer = await crypto.subtle.digest("SHA-256", data);
+  const hashArray = Array.from(new Uint8Array(hashBuffer));
+  return hashArray.map(b => b.toString(16).padStart(2, "0")).join("");
+}
+
+/**
+ * Configuration for a calendar source
+ */
+interface Source {
+  /** URL to the .ics file */
+  url: string;
+  /** Optional name for the source (used in sourceName field) */
+  name: string | undefined;
+}
+
+/**
+ * Plugin configuration structure
+ */
+interface PlugConfig {
+  /** List of calendar sources to sync */
+  sources: Source[];
+  /** Cache duration in seconds (default: 21600 = 6 hours) */
+  cacheDuration: number | undefined;
+}
+
+/**
+ * Calendar event object indexed in SilverBullet
+ * Queryable via: query[from index.tag "ical-event" ...]
+ */
+interface CalendarEvent {
+  // Index metadata
+  /** Unique identifier (event UID or SHA-256 hash) */
+  ref: string;
+  /** Object tag for LIQ queries */
+  tag: "ical-event";
+
+  // Event details
+  /** Event title */
   summary: string | undefined;
+  /** Event description/notes */
   description: string | undefined;
+  /** Event location */
   location: string | undefined;
 
-  // Same as SilverBullet pages
-  created: string | undefined;
-  lastModified: string | undefined;
-  // Keep consistent with dates above
+  // Timestamps (formatted with localDateString)
+  /** Event start date/time */
   start: string | undefined;
+  /** Event end date/time */
   end: string | undefined;
+  /** Event creation date/time */
+  created: string | undefined;
+  /** Last modification date/time */
+  lastModified: string | undefined;
 
+  // Source tracking
+  /** Name of the calendar source */
   sourceName: string | undefined;
 }
 
-interface Source {
-  url: string; // Should be an .ics file
-  name: string | undefined; // Optional name that will be assigned to events
-}
+/**
+ * Synchronizes calendar events from configured sources and indexes them.
+ * This command fetches events from all configured iCalendar sources and
+ * makes them queryable via Lua Integrated Query.
+ */
+export async function syncCalendars() {
+  try {
+    // Get configuration (including cache duration)
+    const plugConfig = await config.get<PlugConfig>("icalendar", { sources: [] });
+    const cacheDurationSeconds = plugConfig.cacheDuration ?? DEFAULT_CACHE_DURATION_SECONDS;
+    const cacheDurationMs = cacheDurationSeconds * 1000;
 
-export async function queryEvents(
-  { query }: QueryProviderEvent,
-): Promise<any[]> {
-  const events: Event[] = [];
-
-  const sources = await getSources();
-  for (const source of sources) {
-    const identifier = (source.name === undefined || source.name === "")
-      ? source.url
-      : source.name;
-
-    try {
-      const result = await fetch(source.url);
-      const icsData = await result.text();
-
-      const calendarParsed: VCalendar = parseIcsCalendar(icsData);
-      if (calendarParsed.events === undefined) {
-        throw new Error("Didn't parse events from ics data");
-      }
-
-      // The order here is the default order of columns without the select clause
-      for (const icsEvent of calendarParsed.events) {
-        events.push({
-          summary: icsEvent.summary,
-          sourceName: source.name,
-
-          location: icsEvent.location,
-          description: icsEvent.description,
-
-          start: localDateString(icsEvent.start.date),
-          end: icsEvent.end ? localDateString(icsEvent.end.date) : undefined,
-          created: icsEvent.created
-            ? localDateString(icsEvent.created.date)
-            : undefined,
-          lastModified: icsEvent.lastModified
-            ? localDateString(icsEvent.lastModified.date)
-            : undefined,
-        });
-      }
-    } catch (err) {
-      console.error(
-        `Getting events from ${identifier} failed with:`,
-        err,
-      );
+    const sources = await getSources();
+    if (sources.length === 0) {
+      // Ignore processing if no sources are declared
+      return;
     }
+
+    // Check cache to avoid too frequent syncs
+    const lastSync = await clientStore.get(CACHE_KEY);
+    const now = Date.now();
+
+    if (lastSync && (now - lastSync) < cacheDurationMs) {
+      const ageSeconds = Math.round((now - lastSync) / 1000);
+      console.log(`[iCalendar] Using cached data (${ageSeconds}s old)`);
+      return;
+    }
+
+    console.log(`[iCalendar] Syncing ${sources.length} calendar source(s)...`);
+    await editor.flashNotification("Syncing calendars...", "info");
+
+    const allEvents: CalendarEvent[] = [];
+    let successCount = 0;
+
+    for (const source of sources) {
+      const identifier = source.name || source.url;
+
+      try {
+        const events = await fetchAndParseCalendar(source);
+        allEvents.push(...events);
+        successCount++;
+      } catch (err) {
+        console.error(`[iCalendar] Failed to sync "${identifier}":`, err);
+        await editor.flashNotification(
+          `Failed to sync "${identifier}"`,
+          "error"
+        );
+      }
+    }
+
+    // Index all events in SilverBullet's object store
+    // Using a virtual page "$icalendar" to store external calendar data
+    await index.indexObjects("$icalendar", allEvents);
+
+    // Update cache timestamp
+    await clientStore.set(CACHE_KEY, now);
+
+    const summary = `Synced ${allEvents.length} events from ${successCount}/${sources.length} source(s)`;
+    console.log(`[iCalendar] ${summary}`);
+    await editor.flashNotification(summary, "info");
+  } catch (err) {
+    console.error("[iCalendar] Sync failed:", err);
+    await editor.flashNotification(
+      "Failed to sync calendars",
+      "error"
+    );
   }
-  return applyQuery(query, events, {}, {});
 }
 
-async function getSources(): Promise<Source[]> {
-  const config = await system.getSpaceConfig("icalendar", {});
+/**
+ * Fetches and parses events from a single calendar source
+ */
+async function fetchAndParseCalendar(source: Source): Promise<CalendarEvent[]> {
+  const response = await fetch(source.url);
 
-  if (!config.sources || !Array.isArray(config.sources)) {
-    // The queries are running on server, probably because of that, can't use editor.flashNotification
-    console.error("Configure icalendar.sources");
+  if (!response.ok) {
+    const error = new Error(`HTTP ${response.status}: ${response.statusText}`);
+    console.error(`[iCalendar] HTTP error:`, { source, status: response.status, statusText: response.statusText });
+    throw error;
+  }
+
+  const icsData = await response.text();
+  const calendar: VCalendar = parseIcsCalendar(icsData);
+
+  if (!calendar.events || calendar.events.length === 0) {
     return [];
   }
 
-  const sources = config.sources;
+  return await Promise.all(calendar.events.map(async (icsEvent): Promise<CalendarEvent> => {
+    // Create a unique ref using UID if available, otherwise hash unique fields
+    const ref = icsEvent.uid || await sha256Hash(`${icsEvent.uid || ''}${icsEvent.start}${icsEvent.summary}`);
 
-  if (sources.length === 0) {
-    console.error("Empty icalendar.sources");
+    return {
+      ref,
+      tag: "ical-event" as const,
+      summary: icsEvent.summary,
+      description: icsEvent.description,
+      location: icsEvent.location,
+      start: icsEvent.start ? localDateString(icsEvent.start.date) : undefined,
+      end: icsEvent.end ? localDateString(icsEvent.end.date) : undefined,
+      created: icsEvent.created ? localDateString(icsEvent.created.date) : undefined,
+      lastModified: icsEvent.lastModified ? localDateString(icsEvent.lastModified.date) : undefined,
+      sourceName: source.name,
+    };
+  }));
+}
+
+/**
+ * Retrieves configured calendar sources from CONFIG
+ */
+async function getSources(): Promise<Source[]> {
+  const plugConfig = await config.get<PlugConfig>("icalendar", { sources: [] });
+
+  if (!plugConfig.sources || !Array.isArray(plugConfig.sources)) {
+    console.error("[iCalendar] Invalid configuration:", { plugConfig });
+    return [];
+  }
+
+  if (plugConfig.sources.length === 0) {
     return [];
   }
 
   const validated: Source[] = [];
-  for (const src of sources) {
+  for (const src of plugConfig.sources) {
     if (typeof src.url !== "string") {
-      console.error(
-        `Invalid iCalendar source`,
-        src,
-      );
+      console.error("[iCalendar] Invalid source (missing url):", src);
       continue;
     }
     validated.push({
       url: src.url,
-      name: (typeof src.name === "string") ? src.name : undefined,
+      name: typeof src.name === "string" ? src.name : undefined,
     });
   }
 
   return validated;
 }
 
-// Copied from @silverbulletmd/silverbullet/lib/dates.ts which is not exported in the package
-export function localDateString(d: Date): string {
-  return d.getFullYear() +
-    "-" + String(d.getMonth() + 1).padStart(2, "0") +
-    "-" + String(d.getDate()).padStart(2, "0") +
-    "T" + String(d.getHours()).padStart(2, "0") +
-    ":" + String(d.getMinutes()).padStart(2, "0") +
-    ":" + String(d.getSeconds()).padStart(2, "0") +
-    "." + String(d.getMilliseconds()).padStart(3, "0");
 }
 
+/**
+ * Shows the plugin version
+ */
 export async function showVersion() {
-  await editor.flashNotification(`iCalendar Plug ${VERSION}`);
+  await editor.flashNotification(`iCalendar Plug ${VERSION}`, "info");
 }
