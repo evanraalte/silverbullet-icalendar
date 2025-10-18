@@ -20,6 +20,6 @@
   },
   "imports": {
     "@silverbulletmd/silverbullet": "jsr:@silverbulletmd/silverbullet@^2.0.0",
-    "ts-ics": "npm:ts-ics@1.6.5"
+    "ts-ics": "npm:ts-ics@2.4.0"
   }
 }
