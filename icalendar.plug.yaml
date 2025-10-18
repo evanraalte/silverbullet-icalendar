@@ -7,6 +7,8 @@ functions:
     command:
       name: "iCalendar: Sync"
       priority: -1
+    events:
+      - editor:init
   forceSync:
     path: ./icalendar.ts:forceSync
     command:
