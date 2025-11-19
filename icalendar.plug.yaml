@@ -42,6 +42,12 @@ config:
               type: string
             name:
               type: string
+            username:
+              type: string
+              description: "Username for Basic authentication (optional)"
+            password:
+              type: string
+              description: "Password for Basic authentication (optional)"
       cacheDuration:
         type: number
         description: "Interval between two calendar synchronizations (default: 21600 = 6 hours)"

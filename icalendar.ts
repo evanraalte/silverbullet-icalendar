@@ -29,6 +29,8 @@ type DateToString<T> = T extends Date ? string
 interface Source {
   url: string;
   name: string | undefined;
+  username: string | undefined;
+  password: string | undefined;
 }
 
 /**
@@ -138,6 +140,8 @@ async function getSources(): Promise<Source[]> {
     validated.push({
       url: src.url,
       name: typeof src.name === "string" ? src.name : undefined,
+      username: typeof src.username === "string" ? src.username : undefined,
+      password: typeof src.password === "string" ? src.password : undefined,
     });
   }
 
@@ -152,7 +156,15 @@ async function getSources(): Promise<Source[]> {
  * Fetches and parses events from a single calendar source
  */
 async function fetchAndParseCalendar(source: Source): Promise<CalendarEvent[]> {
-  const response = await fetch(source.url);
+  // Build request headers with authentication if credentials are provided
+  const headers: Record<string, string> = {};
+
+  if (source.username && source.password) {
+    const credentials = btoa(`${source.username}:${source.password}`);
+    headers['Authorization'] = `Basic ${credentials}`;
+  }
+
+  const response = await fetch(source.url, { headers });
 
   if (!response.ok) {
     const error = new Error(`HTTP ${response.status}: ${response.statusText}`);

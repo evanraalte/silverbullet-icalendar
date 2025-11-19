@@ -26,7 +26,21 @@ icalendar:
   - url: https://example.com/calendar.ics
     # this will be set as sourceName on all results from this source
     name: Example calendar
+  # Optional: for authenticated CalDAV sources
+  - url: https://caldav.example.com/user/calendar/
+    name: Authenticated calendar
+    username: myuser
+    password: mypassword
 ```
+
+#### Authentication
+
+The plug supports Basic HTTP authentication for CalDAV sources that require credentials. Simply add `username` and `password` fields to your source configuration:
+
+- **username**: Your CalDAV username
+- **password**: Your CalDAV password
+
+Both fields are optional. If provided, the plug will use HTTP Basic authentication when fetching the calendar.
 
 Instructions to get the source URL for some calendar services:
 
@@ -35,6 +49,7 @@ Instructions to get the source URL for some calendar services:
   - Share calendar link
   - Details (three dots icon), copy subscription link
   - Verify that the link ends with `?export`
+  - **Note**: For private calendars, you may need to provide your Nextcloud username and password (or app-specific password) in the configuration
 - Google Calendar ([source](https://support.google.com/calendar/answer/37648?hl=en#zippy=%2Cget-your-calendar-view-only)): 
   - Calendar settings (pencil icon to the right of the name)
   - Settings and Sharing, scroll down to Integrate calendar
