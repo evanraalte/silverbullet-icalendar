@@ -6,9 +6,10 @@ import { convertIcsCalendar, type IcsCalendar, type IcsEvent, type IcsDateObject
 // Constants
 // ============================================================================
 
-const VERSION = "0.2.1";
+const VERSION = "0.3.0";
 const CACHE_KEY = "icalendar:lastSync";
 const DEFAULT_CACHE_DURATION_SECONDS = 21600; // 6 hours
+const DEFAULT_WATCH_INTERVAL_SECONDS = 30; // 30 seconds for watched sources
 
 // ============================================================================
 // Types
@@ -31,6 +32,8 @@ interface Source {
   name: string | undefined;
   username: string | undefined;
   password: string | undefined;
+  watch: boolean | undefined;
+  watchInterval: number | undefined;
 }
 
 /**
@@ -142,6 +145,8 @@ async function getSources(): Promise<Source[]> {
       name: typeof src.name === "string" ? src.name : undefined,
       username: typeof src.username === "string" ? src.username : undefined,
       password: typeof src.password === "string" ? src.password : undefined,
+      watch: typeof src.watch === "boolean" ? src.watch : undefined,
+      watchInterval: typeof src.watchInterval === "number" ? src.watchInterval : undefined,
     });
   }
 
@@ -153,13 +158,63 @@ async function getSources(): Promise<Source[]> {
 // ============================================================================
 
 /**
+ * Generates a cache key for a specific source
+ */
+async function getSourceCacheKey(source: Source): Promise<string> {
+  const hash = await sha256Hash(source.url);
+  return `icalendar:source:${hash}`;
+}
+
+/**
+ * Checks if a source needs to be synced based on its cache and watch settings
+ */
+async function shouldSyncSource(source: Source, globalLastSync: number, globalCacheDuration: number): Promise<boolean> {
+  const now = Date.now();
+  const isFileUrl = source.url.startsWith("file://");
+
+  // For watched file:// sources, use per-source cache with watchInterval
+  if (isFileUrl && source.watch) {
+    const watchIntervalSeconds = source.watchInterval ?? DEFAULT_WATCH_INTERVAL_SECONDS;
+    const watchIntervalMs = watchIntervalSeconds * 1000;
+    const sourceCacheKey = await getSourceCacheKey(source);
+    const sourceLastSync = await clientStore.get(sourceCacheKey);
+
+    if (sourceLastSync && (now - sourceLastSync) < watchIntervalMs) {
+      return false; // Don't sync, still within watch interval
+    }
+    return true; // Sync this watched source
+  }
+
+  // For non-watched sources, use global cache
+  if (globalLastSync && (now - globalLastSync) < globalCacheDuration) {
+    return false; // Don't sync, global cache is fresh
+  }
+
+  return true; // Sync based on global cache expiry
+}
+
+/**
+ * Updates the cache timestamp for a source
+ */
+async function updateSourceCache(source: Source): Promise<void> {
+  const isFileUrl = source.url.startsWith("file://");
+  if (isFileUrl && source.watch) {
+    const sourceCacheKey = await getSourceCacheKey(source);
+    await clientStore.set(sourceCacheKey, Date.now());
+  }
+}
+
+/**
  * Fetches and parses events from a single calendar source
+ * Supports both HTTP(S) URLs (with optional Basic auth) and file:// URLs
  */
 async function fetchAndParseCalendar(source: Source): Promise<CalendarEvent[]> {
-  // Build request headers with authentication if credentials are provided
+  const isFileUrl = source.url.startsWith("file://");
+
+  // Build request headers with authentication if credentials are provided (HTTP only)
   const headers: Record<string, string> = {};
 
-  if (source.username && source.password) {
+  if (!isFileUrl && source.username && source.password) {
     const credentials = btoa(`${source.username}:${source.password}`);
     headers['Authorization'] = `Basic ${credentials}`;
   }
@@ -167,8 +222,8 @@ async function fetchAndParseCalendar(source: Source): Promise<CalendarEvent[]> {
   const response = await fetch(source.url, { headers });
 
   if (!response.ok) {
-    const error = new Error(`HTTP ${response.status}: ${response.statusText}`);
-    console.error(`[iCalendar] HTTP error:`, { source, status: response.status, statusText: response.statusText });
+    const error = new Error(`${isFileUrl ? 'File' : 'HTTP'} ${response.status}: ${response.statusText}`);
+    console.error(`[iCalendar] ${isFileUrl ? 'File' : 'HTTP'} error:`, { source, status: response.status, statusText: response.statusText });
     throw error;
   }
 
@@ -200,6 +255,7 @@ async function fetchAndParseCalendar(source: Source): Promise<CalendarEvent[]> {
 
 /**
  * Synchronizes calendar events from configured sources and indexes them
+ * Supports intelligent caching: global cache for regular sources, per-source cache for watched file:// sources
  */
 export async function syncCalendars() {
   try {
@@ -215,15 +271,37 @@ export async function syncCalendars() {
     const lastSync = await clientStore.get(CACHE_KEY);
     const now = Date.now();
 
-    if (lastSync && (now - lastSync) < cacheDurationMs) {
-      const ageSeconds = Math.round((now - lastSync) / 1000);
+    // Check if any source needs syncing
+    let needsSync = false;
+    let watchedSourceTriggered = false;
+
+    for (const source of sources) {
+      const shouldSync = await shouldSyncSource(source, lastSync, cacheDurationMs);
+      if (shouldSync) {
+        needsSync = true;
+        if (source.url.startsWith("file://") && source.watch) {
+          watchedSourceTriggered = true;
+        }
+      }
+    }
+
+    // If no sources need syncing, skip
+    if (!needsSync) {
+      const ageSeconds = Math.round((now - (lastSync || now)) / 1000);
       console.log(`[iCalendar] Using cached data (${ageSeconds}s old)`);
       return;
     }
 
-    console.log(`[iCalendar] Syncing ${sources.length} calendar source(s)...`);
-    await editor.flashNotification("Syncing calendars...", "info");
+    // Suppress notifications for background syncs of watched sources only
+    const showNotification = !watchedSourceTriggered || sources.length > 1;
+    if (showNotification) {
+      console.log(`[iCalendar] Syncing ${sources.length} calendar source(s)...`);
+      await editor.flashNotification("Syncing calendars...", "info");
+    } else {
+      console.log(`[iCalendar] Background sync triggered by watched source`);
+    }
 
+    // Sync all sources to maintain complete index
     const allEvents: CalendarEvent[] = [];
     let successCount = 0;
 
@@ -233,22 +311,27 @@ export async function syncCalendars() {
       try {
         const events = await fetchAndParseCalendar(source);
         allEvents.push(...events);
+        await updateSourceCache(source);
         successCount++;
       } catch (err) {
         console.error(`[iCalendar] Failed to sync "${identifier}":`, err);
-        await editor.flashNotification(
-          `Failed to sync "${identifier}"`,
-          "error"
-        );
+        if (showNotification) {
+          await editor.flashNotification(
+            `Failed to sync "${identifier}"`,
+            "error"
+          );
+        }
       }
     }
 
     await index.indexObjects("$icalendar", allEvents);
     await clientStore.set(CACHE_KEY, now);
 
-    const summary = `Synced ${allEvents.length} events from ${successCount}/${sources.length} source(s)`;
-    console.log(`[iCalendar] ${summary}`);
-    await editor.flashNotification(summary, "info");
+    if (showNotification) {
+      const summary = `Synced ${allEvents.length} events from ${successCount}/${sources.length} source(s)`;
+      console.log(`[iCalendar] ${summary}`);
+      await editor.flashNotification(summary, "info");
+    }
   } catch (err) {
     console.error("[iCalendar] Sync failed:", err);
     await editor.flashNotification("Failed to sync calendars", "error");
@@ -307,6 +390,50 @@ export async function clearCache() {
       `Failed to clear cache: ${err instanceof Error ? err.message : String(err)}`,
       "error"
     );
+  }
+}
+
+/**
+ * Background watcher for file:// sources with watch=true
+ * Continuously monitors and syncs watched sources at their specified intervals
+ */
+async function backgroundWatch() {
+  try {
+    const sources = await getSources();
+    const watchedSources = sources.filter(s => s.url.startsWith("file://") && s.watch);
+
+    if (watchedSources.length === 0) {
+      return; // No watched sources, stop watching
+    }
+
+    // Find the minimum watch interval
+    const minInterval = Math.min(
+      ...watchedSources.map(s => (s.watchInterval ?? DEFAULT_WATCH_INTERVAL_SECONDS) * 1000)
+    );
+
+    // Trigger sync (which will check each source's individual cache)
+    await syncCalendars();
+
+    // Schedule next watch cycle
+    setTimeout(() => backgroundWatch(), minInterval);
+  } catch (err) {
+    console.error("[iCalendar] Background watch error:", err);
+    // Retry after default interval
+    setTimeout(() => backgroundWatch(), DEFAULT_WATCH_INTERVAL_SECONDS * 1000);
+  }
+}
+
+/**
+ * Starts background watching for file:// sources
+ * Called on editor initialization if any sources have watch=true
+ */
+export async function startWatcher() {
+  const sources = await getSources();
+  const hasWatchedSources = sources.some(s => s.url.startsWith("file://") && s.watch);
+
+  if (hasWatchedSources) {
+    console.log("[iCalendar] Starting background watcher for file:// sources");
+    await backgroundWatch();
   }
 }
 

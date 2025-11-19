@@ -9,6 +9,10 @@ functions:
       priority: -1
     events:
       - editor:init
+  startWatcher:
+    path: ./icalendar.ts:startWatcher
+    events:
+      - editor:init
   forceSync:
     path: ./icalendar.ts:forceSync
     command:
@@ -40,14 +44,22 @@ config:
           properties:
             url:
               type: string
+              description: "Calendar URL (http://, https://, or file://)"
             name:
               type: string
+              description: "Display name for this calendar (optional)"
             username:
               type: string
-              description: "Username for Basic authentication (optional)"
+              description: "Username for Basic authentication (optional, HTTP(S) only)"
             password:
               type: string
-              description: "Password for Basic authentication (optional)"
+              description: "Password for Basic authentication (optional, HTTP(S) only)"
+            watch:
+              type: boolean
+              description: "Enable automatic syncing for file:// URLs (optional, default: false)"
+            watchInterval:
+              type: number
+              description: "Sync interval in seconds for watched sources (optional, default: 30)"
       cacheDuration:
         type: number
         description: "Interval between two calendar synchronizations (default: 21600 = 6 hours)"

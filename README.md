@@ -21,36 +21,74 @@ This plug is configured with [Space Config](https://silverbullet.md/Space%20Conf
 
 ```yaml
 icalendar:
-  # where to get the iCalendar data from
+  # Global cache duration (applies to all non-watched sources)
+  cacheDuration: 21600  # optional, in seconds, default: 6 hours
+
+  # Calendar sources
   sources:
+  # Example 1: Public HTTP calendar
   - url: https://example.com/calendar.ics
-    # this will be set as sourceName on all results from this source
     name: Example calendar
-  # Optional: for authenticated CalDAV sources
+
+  # Example 2: Authenticated CalDAV (HTTP Basic Auth)
   - url: https://caldav.example.com/user/calendar/
     name: Authenticated calendar
     username: myuser
     password: mypassword
+
+  # Example 3: Local file with automatic watching (for local CalDAV servers like Radicale)
+  - url: file:///path/to/radicale/collections/user/calendar/calendar.ics
+    name: Local Radicale Calendar
+    watch: true
+    watchInterval: 30  # optional, in seconds, default: 30
 ```
+
+#### URL Types
+
+This plug supports three types of calendar sources:
+
+1. **Public HTTP(S) URLs**: Standard iCalendar URLs (`.ics` files)
+2. **Authenticated HTTP(S) URLs**: CalDAV or iCalendar URLs requiring Basic authentication
+3. **Local file:// URLs**: Direct filesystem access to `.ics` files (useful for local CalDAV servers)
 
 #### Authentication
 
-The plug supports Basic HTTP authentication for CalDAV sources that require credentials. Simply add `username` and `password` fields to your source configuration:
+The plug supports Basic HTTP authentication for CalDAV sources that require credentials. Add `username` and `password` fields to your source configuration:
 
-- **username**: Your CalDAV username
-- **password**: Your CalDAV password
+- **username**: Your CalDAV username (required for auth)
+- **password**: Your CalDAV password (required for auth)
 
-Both fields are optional. If provided, the plug will use HTTP Basic authentication when fetching the calendar.
+Both fields are optional and only apply to HTTP(S) URLs. Authentication is automatically skipped for `file://` URLs.
+
+#### Real-time Sync with File Watching
+
+For local CalDAV servers (like Radicale), you can enable automatic file watching to get near real-time updates:
+
+- **watch**: Set to `true` to enable automatic syncing (only for `file://` URLs)
+- **watchInterval**: Sync interval in seconds (default: 30 seconds)
+
+When watch mode is enabled:
+- The plug monitors the file for changes every `watchInterval` seconds
+- Syncs happen automatically in the background without notifications
+- Other (non-watched) sources are also refreshed when a watched source triggers a sync
+- Perfect for local Radicale servers where you can point directly to the `.ics` files
 
 Instructions to get the source URL for some calendar services:
 
-- Nextcloud ([source](https://help.nextcloud.com/t/how-to-access-the-calendar-ics-file-via-url/7880)):
+- **Radicale** (local CalDAV server):
+  - **HTTP Method**: Use `http://localhost:5232/user/calendar/` with username/password
+  - **File Method (recommended for real-time sync)**: Use `file:///path/to/radicale/collections/user/calendar.ics` with `watch: true`
+  - Default Radicale storage location: `~/.var/lib/radicale/collections/`
+  - Example: `file:///home/user/.var/lib/radicale/collections/collection-root/user/calendar.ics`
+
+- **Nextcloud** ([source](https://help.nextcloud.com/t/how-to-access-the-calendar-ics-file-via-url/7880)):
   - Edit calendar (pencil icon to the right of the name)
   - Share calendar link
   - Details (three dots icon), copy subscription link
   - Verify that the link ends with `?export`
-  - **Note**: For private calendars, you may need to provide your Nextcloud username and password (or app-specific password) in the configuration
-- Google Calendar ([source](https://support.google.com/calendar/answer/37648?hl=en#zippy=%2Cget-your-calendar-view-only)): 
+  - **Note**: For private calendars, provide your Nextcloud username and password (or app-specific password)
+
+- **Google Calendar** ([source](https://support.google.com/calendar/answer/37648?hl=en#zippy=%2Cget-your-calendar-view-only)):
   - Calendar settings (pencil icon to the right of the name)
   - Settings and Sharing, scroll down to Integrate calendar
   - Copy the link for Secret address in iCal format
@@ -98,7 +136,7 @@ ${query[[
 - More indexed object types:
   - `ical-todo` for `VTODO` components
   - `ical-calendar` showing information about configured calendars
-- Support `file://` URL scheme (use an external script or filesystem instead of authentication on CalDAV)
+- Use native filesystem watching (Deno.watchFs) if available in SilverBullet plug environment
 
 ## Contributing
 
